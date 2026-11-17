@@ -1,10 +1,9 @@
 import os
 import html
-import asyncio
+import requests
 import feedparser
 import anthropic
 from youtube_transcript_api import YouTubeTranscriptApi
-from mcp_elevenreader.client import ElevenReaderClient
 
 PLAYLIST_ID = "PLGaYlBJIOoa94hnb-z2i64eVPcGZPUvo9"
 PLAYLIST_RSS = f"https://www.youtube.com/feeds/videos.xml?playlist_id={PLAYLIST_ID}"
@@ -54,20 +53,61 @@ RAW TRANSCRIPT:
     )
     return response.content[0].text
 
-async def push_to_elevenreader(title, script_text):
-    html_path = "briefing.html"
+def get_elevenreader_id_token(refresh_token):
+    # Fetch ElevenReader's public Firebase web API key from the app bundle
+    app_page = requests.get("https://elevenreader.io", timeout=15).text
+    import re
+    match = re.search(r'AIzaSy[0-9A-Za-z_-]{33}', app_page)
+    if not match:
+        # Fallback: inspect main JS bundle if not inline
+        scripts = re.findall(r'src="([^"]+\.js[^"]*)"', app_page)
+        for s in scripts:
+            url = s if s.startswith("http") else f"https://elevenreader.io{s}"
+            js = requests.get(url, timeout=15).text
+            match = re.search(r'AIzaSy[0-9A-Za-z_-]{33}', js)
+            if match:
+                break
+    if not match:
+        raise RuntimeError("Could not locate ElevenReader Firebase API key.")
+
+    firebase_api_key = match.group(0)
+    resp = requests.post(
+        f"https://securetoken.googleapis.com/v1/token?key={firebase_api_key}",
+        json={"grant_type": "refresh_token", "refresh_token": refresh_token},
+        timeout=15
+    )
+    resp.raise_for_status()
+    return resp.json()["id_token"]
+
+def push_to_elevenreader(title, script_text):
+    id_token = get_elevenreader_id_token(os.environ["ELEVEN_REFRESH_TOKEN"])
+    
     paragraphs = [p.strip() for p in script_text.split("\n\n") if p.strip()]
     html_body = "".join(f"<p>{html.escape(p)}</p>" for p in paragraphs)
-    
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(
-            f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
-            f"<title>{html.escape(title)}</title></head>"
-            f"<body><h1>{html.escape(title)}</h1>{html_body}</body></html>"
-        )
+    html_doc = (
+        f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<title>{html.escape(title)}</title></head>"
+        f"<body><h1>{html.escape(title)}</h1>{html_body}</body></html>"
+    )
 
-    client = ElevenReaderClient(refresh_token=os.environ["ELEVEN_REFRESH_TOKEN"])
-    await client.add_document(html_path)
+    files = {
+        "file": ("briefing.html", html_doc.encode("utf-8"), "text/html")
+    }
+    data = {
+        "name": f"{title} (30-Min Briefing)"
+    }
+    headers = {
+        "Authorization": f"Bearer {id_token}"
+    }
+    resp = requests.post(
+        "https://api.elevenlabs.io/v1/reader/reads/add",
+        headers=headers,
+        data=data,
+        files=files,
+        timeout=30
+    )
+    print(f"ElevenReader API status: {resp.status_code} | {resp.text[:300]}")
+    resp.raise_for_status()
     print(f"Uploaded '{title}' to ElevenReader library.")
 
 def main():
@@ -91,7 +131,7 @@ def main():
 
         print(f"Processing full episode: {entry.title} ({word_count} words)...")
         script = generate_podcast_script(entry.title, entry.published, raw_text)
-        asyncio.run(push_to_elevenreader(entry.title, script))
+        push_to_elevenreader(entry.title, script)
         save_processed_id(video_id)
         break
 
