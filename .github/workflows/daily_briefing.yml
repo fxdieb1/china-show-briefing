@@ -22,7 +22,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install feedparser anthropic youtube-transcript-api mcp-elevenreader
+        run: pip install feedparser anthropic youtube-transcript-api requests
 
       - name: Run briefing generator
         env:
