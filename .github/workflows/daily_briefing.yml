@@ -8,15 +8,10 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 jobs:
   build-briefing:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -27,29 +22,18 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install feedparser anthropic youtube-transcript-api
+        run: pip install feedparser anthropic youtube-transcript-api mcp-elevenreader
 
       - name: Run briefing generator
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ELEVEN_REFRESH_TOKEN: ${{ secrets.ELEVEN_REFRESH_TOKEN }}
         run: python generate_briefing.py
 
-      - name: Commit updated feed.xml
+      - name: Save processed episode ID
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add feed.xml processed_ids.txt
-          git diff --staged --quiet || git commit -m "Update China Show briefing"
+          git add processed_ids.txt
+          git diff --staged --quiet || git commit -m "Mark episode processed"
           git push
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: '.'
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
